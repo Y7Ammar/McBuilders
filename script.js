@@ -1,6 +1,7 @@
 // ==================== State Management ====================
 let currentSchematic = null;
 let isGenerating = false;
+const API_URL = 'http://localhost:5000';
 
 // ==================== Utility Functions ====================
 function scrollToGenerator() {
@@ -54,14 +55,42 @@ async function generateSchematic() {
     document.getElementById('progressFill').style.width = '0%';
 
     try {
-        // Simulate AI processing (2-3 minutes in real implementation)
+        // Call the backend API to generate schematic
+        const response = await fetch(`${API_URL}/api/generate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                description: description,
+                edition: edition,
+                style: style
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server error: ${response.statusText}`);
+        }
+
+        const apiData = await response.json();
+        
+        if (!apiData.success) {
+            throw new Error(apiData.error || 'Generation failed');
+        }
+
+        // Simulate processing steps with visual feedback
         await simulateAIProcessing(description, edition, style);
         
-        // After processing, show preview
-        showPreview(description, edition, style);
+        // Show preview with actual backend data
+        showPreview(apiData, description, edition, style);
+        
     } catch (error) {
         console.error('Error generating schematic:', error);
-        alert('Error generating schematic. Please try again.');
+        let errorMsg = error.message;
+        if (error.message.includes('Failed to fetch')) {
+            errorMsg = 'Cannot connect to backend. Make sure it\'s running on http://localhost:5000\n\nRun: python backend/app.py';
+        }
+        alert('❌ Error generating schematic:\n' + errorMsg);
         resetGenerator();
     }
 }
@@ -79,8 +108,8 @@ async function simulateAIProcessing(description, edition, style) {
         'Finalizing schematic...'
     ];
 
-    // Simulate 3-minute process (in demo, use 6 seconds for 3 minutes of real processing)
-    const totalTime = 6000; // 6 seconds for demo
+    // Simulate 3-minute process (in demo, use 3 seconds for visual effect)
+    const totalTime = 3000; // 3 seconds for demo
     const stepDuration = totalTime / steps.length;
     
     for (let i = 0; i < steps.length; i++) {
@@ -96,34 +125,34 @@ async function simulateAIProcessing(description, edition, style) {
     }
 }
 
-function showPreview(description, edition, style) {
+function showPreview(apiData, description, edition, style) {
     // Hide loading, show preview
     document.getElementById('loadingContainer').style.display = 'none';
     document.getElementById('previewContainer').style.display = 'flex';
     
-    // Create schematic data
+    // Use actual backend data
     currentSchematic = {
         description,
         edition,
         style,
-        dimensions: {
-            width: Math.floor(Math.random() * 50) + 30,
-            height: Math.floor(Math.random() * 40) + 20,
-            depth: Math.floor(Math.random() * 50) + 30
-        },
-        blockCount: Math.floor(Math.random() * 5000) + 2000,
-        timestamp: new Date().toLocaleString()
+        dimensions: apiData.dimensions,
+        blockCount: apiData.block_count,
+        complexity: apiData.metadata.complexity,
+        timestamp: apiData.metadata.generated,
+        blocks: apiData.sample_blocks
     };
 
-    // Update preview info
+    // Update preview info with actual data
     const previewInfo = document.getElementById('previewInfo');
+    const generatedTime = new Date(currentSchematic.timestamp).toLocaleString();
     previewInfo.innerHTML = `
-        <strong>Schematic Details:</strong><br>
+        <strong>✅ Schematic Generated Successfully!</strong><br>
         <strong>Edition:</strong> ${edition.charAt(0).toUpperCase() + edition.slice(1)}<br>
         <strong>Style:</strong> ${style.charAt(0).toUpperCase() + style.slice(1)}<br>
         <strong>Dimensions:</strong> ${currentSchematic.dimensions.width} × ${currentSchematic.dimensions.height} × ${currentSchematic.dimensions.depth}<br>
         <strong>Total Blocks:</strong> ${currentSchematic.blockCount.toLocaleString()}<br>
-        <strong>Generated:</strong> ${currentSchematic.timestamp}
+        <strong>Complexity:</strong> ${currentSchematic.complexity}/25<br>
+        <strong>Generated:</strong> ${generatedTime}
     `;
 
     // Draw preview
@@ -158,8 +187,42 @@ function drawPreview() {
     ctx.fillStyle = '#f0f4f8';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw a simple isometric preview
-    drawIsometricPreview(ctx, canvas.width, canvas.height);
+    // Draw a simple isometric preview with actual block data
+    if (currentSchematic && currentSchematic.blocks && currentSchematic.blocks.length > 0) {
+        drawBlockPreview(ctx, canvas.width, canvas.height);
+    } else {
+        drawIsometricPreview(ctx, canvas.width, canvas.height);
+    }
+}
+
+function drawBlockPreview(ctx, width, height) {
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const blockSize = 8;
+    
+    const colors = {
+        98: '#8B7355',    // stone_bricks - brown
+        17: '#654321',    // oak_wood - dark brown
+        95: '#87CEEB',    // glass - light blue
+        42: '#C0C0C0',    // iron_block - silver
+        251: '#808080',   // concrete - gray
+    };
+
+    // Draw sample blocks from the schematic
+    for (let i = 0; i < Math.min(currentSchematic.blocks.length, 50); i++) {
+        const block = currentSchematic.blocks[i];
+        const x = centerX + (block.x - 25) * 2;
+        const y = centerY + (block.z - 25) * 2 - block.y * 3;
+        
+        const color = colors[block.block_id] || '#8b5cf6';
+        drawIsometricBlock(ctx, x, y, blockSize, color);
+    }
+
+    // Add title
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Schematic Preview', centerX, 30);
 }
 
 function drawIsometricPreview(ctx, width, height) {
@@ -230,57 +293,53 @@ function drawIsometricBlock(ctx, x, y, size, color) {
 }
 
 // ==================== Download Schematic ====================
-function downloadSchematic() {
+async function downloadSchematic() {
     if (!currentSchematic) {
         alert('No schematic to download!');
         return;
     }
 
-    const edition = currentSchematic.edition;
-    const extension = edition === 'java' ? '.schematic' : '.mcstructure';
-    const filename = `McBuilders_Schematic_${Date.now()}${extension}`;
-
-    // Create a mock schematic file
-    const schematicData = JSON.stringify({
-        name: 'McBuilders Generated Schematic',
-        description: currentSchematic.description,
-        edition: edition,
-        style: currentSchematic.style,
-        dimensions: currentSchematic.dimensions,
-        blockCount: currentSchematic.blockCount,
-        created: currentSchematic.timestamp,
-        blocks: generateMockBlockData(currentSchematic.blockCount)
-    }, null, 2);
-
-    // Create blob and download
-    const blob = new Blob([schematicData], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    // Show feedback
-    alert(`✅ Downloaded: ${filename}\n\nYour ${edition.toUpperCase()} Edition schematic is ready to use!`);
-}
-
-function generateMockBlockData(count) {
-    const blockTypes = ['stone', 'oak_wood', 'dark_oak_wood', 'birch_wood', 'glass', 'dark_oak_leaves'];
-    const blocks = [];
-
-    for (let i = 0; i < Math.min(count, 100); i++) {
-        blocks.push({
-            x: Math.floor(Math.random() * 50),
-            y: Math.floor(Math.random() * 40),
-            z: Math.floor(Math.random() * 50),
-            type: blockTypes[Math.floor(Math.random() * blockTypes.length)]
+    try {
+        const response = await fetch(`${API_URL}/api/download/${currentSchematic.edition}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                description: currentSchematic.description,
+                style: currentSchematic.style
+            })
         });
-    }
 
-    return blocks;
+        if (!response.ok) {
+            throw new Error(`Download failed: ${response.statusText}`);
+        }
+
+        // Get filename from response headers
+        const contentDisposition = response.headers.get('content-disposition');
+        let filename = `schematic_${Date.now()}`;
+        if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+            if (filenameMatch) filename = filenameMatch[1];
+        }
+
+        // Download the file
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        const extension = currentSchematic.edition === 'java' ? '.schematic' : '.mcstructure';
+        alert(`✅ Downloaded: ${filename}\n\nYour ${currentSchematic.edition.toUpperCase()} Edition schematic is ready to use!`);
+    } catch (error) {
+        console.error('Download error:', error);
+        alert('❌ Error downloading schematic:\n' + error.message);
+    }
 }
 
 // ==================== Reset Generator ====================
